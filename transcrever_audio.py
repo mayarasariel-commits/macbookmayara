@@ -9,10 +9,17 @@ vícios de linguagem e organização em parágrafos, mantendo o conteúdo e o
 tom originais.
 
 Uso:
-    python3 transcrever_audio.py <arquivo_audio> <chave_api_anthropic> [modelo_whisper] [idioma]
+    python3 transcrever_audio.py <arquivo_audio> <chave_api_anthropic> [modelo_whisper] [idioma] [workspace_id]
 
 Exemplo:
     python3 transcrever_audio.py Voz.m4a sk-ant-xxxxxxxx small pt
+    python3 transcrever_audio.py Voz.m4a sk-ant-xxxxxxxx small pt wrkspc_xxxxxxxx
+
+O parâmetro [workspace_id] só é necessário se a API da Anthropic retornar o
+erro "anthropic-workspace-id is required..." — algumas contas/organizações
+exigem informar o workspace junto com a chave. Também pode ser definido via
+variável de ambiente ANTHROPIC_WORKSPACE_ID em vez de passado na linha de
+comando.
 
 Requisitos:
     pip install openai-whisper anthropic
@@ -21,6 +28,7 @@ Requisitos:
         - Ubuntu: sudo apt install ffmpeg
 """
 
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -57,7 +65,7 @@ def transcrever_com_whisper(caminho_audio: str, modelo: str, idioma: Optional[st
     return resultado["text"].strip()
 
 
-def revisar_com_claude(texto_bruto: str, api_key: str) -> str:
+def revisar_com_claude(texto_bruto: str, api_key: str, workspace_id: Optional[str] = None) -> str:
     try:
         import anthropic
     except ImportError:
@@ -66,7 +74,8 @@ def revisar_com_claude(texto_bruto: str, api_key: str) -> str:
             "Instale com: pip install anthropic"
         )
 
-    cliente = anthropic.Anthropic(api_key=api_key)
+    headers_extras = {"anthropic-workspace-id": workspace_id} if workspace_id else None
+    cliente = anthropic.Anthropic(api_key=api_key, default_headers=headers_extras)
 
     print("Revisando e formatando a transcrição com Claude...")
     try:
@@ -110,6 +119,7 @@ def main() -> None:
     api_key = sys.argv[2]
     modelo_whisper = sys.argv[3] if len(sys.argv) > 3 else "small"
     idioma = sys.argv[4] if len(sys.argv) > 4 else "pt"
+    workspace_id = sys.argv[5] if len(sys.argv) > 5 else os.environ.get("ANTHROPIC_WORKSPACE_ID")
 
     if not Path(caminho_audio).is_file():
         erro_e_sai(f"arquivo de áudio não encontrado: {caminho_audio}")
@@ -131,7 +141,7 @@ def main() -> None:
     if not texto_bruto:
         erro_e_sai("a transcrição resultou em texto vazio — verifique o arquivo de áudio.")
 
-    texto_final = revisar_com_claude(texto_bruto, api_key)
+    texto_final = revisar_com_claude(texto_bruto, api_key, workspace_id)
 
     caminho_saida = Path(caminho_audio).with_suffix(".txt")
     caminho_saida.write_text(texto_final, encoding="utf-8")

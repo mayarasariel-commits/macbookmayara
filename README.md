@@ -27,13 +27,14 @@ sudo apt install ffmpeg
 ## Uso
 
 ```bash
-python3 transcrever_audio.py <arquivo_audio> <chave_api_anthropic> [modelo_whisper] [idioma]
+python3 transcrever_audio.py <arquivo_audio> <chave_api_anthropic> [modelo_whisper] [idioma] [workspace_id]
 ```
 
 - `arquivo_audio`: caminho do arquivo de áudio (obrigatório).
 - `chave_api_anthropic`: sua chave da API da Anthropic, obtida em https://console.anthropic.com/settings/keys (obrigatório).
 - `modelo_whisper`: `tiny`, `base`, `small` (padrão), `medium` ou `large` — modelos maiores são mais precisos e mais lentos.
 - `idioma`: código do idioma do áudio, ex. `pt` (padrão), `en`. Deixe vazio para detecção automática.
+- `workspace_id`: opcional. Só é necessário se a API retornar o erro `anthropic-workspace-id is required...` — algumas contas exigem informar o workspace junto com a chave. Também pode ser definido via variável de ambiente `ANTHROPIC_WORKSPACE_ID`.
 
 ### Exemplo
 

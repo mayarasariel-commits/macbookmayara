@@ -2,22 +2,28 @@
 // Nenhum nome de pessoa fica neste arquivo. Alunos, pacientes, professores e as
 // regras por nome (ex.: "vivo" vira Fatura Vivo) ficam no cadastro, dentro do banco.
 
+// Movimentos que só mudam o dinheiro de lugar (de um banco para outro, da conta para a aplicação).
+// Entram no saldo, mas não são receita nem despesa.
+const NEUTRAS = new Set(["Transferência entre contas", "Aplicação financeira"]);
 const CATS = {
   E: ["Formação AB", "CFGM", "Clínica Social", "Aula Aberta", "Intervisão", "Projetos", "Link de cartão (Zoop)", "Outras entradas",
-    "GM / Cursos extras", "Reembolsos", "Não identificado"],
+    "GM / Cursos extras", "Anuidades", "Consultório", "Reembolsos", "Não identificado", ...NEUTRAS],
   S: ["Terapeutas", "Professores", "Professores Formação", "Professores CFGM", "Professores Aula Aberta", "Imóvel", "Compartilhada",
-    "Infraestrutura", "Afiliação", "Profissional", "Contador", "Imposto", "Cartão de crédito", "Copeira", "Contrato", "Marketing",
-    "Workshop", "Devolução", "Outras saídas"]
+    "Infraestrutura", "Afiliação", "Profissional", "Contador", "Imposto", "Folha de pagamento", "Tarifas bancárias", "Cartão de crédito",
+    "Copeira", "Contrato", "Marketing", "Workshop", "Devolução", "Outras saídas", ...NEUTRAS]
 };
 const GRUPO_S = {
   "Terapeutas": "Repasses", "Professores": "Repasses", "Professores Formação": "Repasses", "Professores CFGM": "Repasses", "Professores Aula Aberta": "Repasses",
   "Imóvel": "Fixas", "Compartilhada": "Fixas", "Infraestrutura": "Fixas", "Afiliação": "Fixas", "Profissional": "Fixas",
-  "Contador": "Fixas", "Imposto": "Fixas", "Cartão de crédito": "Fixas", "Copeira": "Fixas", "Contrato": "Fixas", "Marketing": "Fixas",
-  "Workshop": "Variáveis", "Devolução": "Variáveis", "Outras saídas": "Variáveis"
+  "Contador": "Fixas", "Imposto": "Fixas", "Folha de pagamento": "Fixas", "Tarifas bancárias": "Fixas", "Cartão de crédito": "Fixas",
+  "Copeira": "Fixas", "Contrato": "Fixas", "Marketing": "Fixas",
+  "Workshop": "Variáveis", "Devolução": "Variáveis", "Outras saídas": "Variáveis",
+  "Transferência entre contas": "Transferências", "Aplicação financeira": "Transferências"
 };
 // Estrutura vazia. Os dados reais chegam do banco (cad/geral) depois do login.
+// contas: [{ id, nome, saldoInicial, desde: "AAAA-MM-DD", encerrada: "AAAA-MM-DD" }]; vazio = uma conta só (modo antigo).
 const DEFAULT_CAD = {
-  conta: "", alunos: [], cfgm: [], fixas: [], pacientes: [], profFormacao: [], profCfgm: [], terapeutasExtra: [],
+  conta: "", contas: [], alunos: [], cfgm: [], fixas: [], pacientes: [], profFormacao: [], profCfgm: [], terapeutasExtra: [],
   clinica: { sobab: 10, poupanca: 5, terapeutas: 85 }, diaRepasse: [13, 15], corte: 15, regras: []
 };
 
@@ -115,6 +121,8 @@ function parseExtrato(texto) {
       .map(x => tirarOp(x, op).replace(RE_DATA, "").replace(/\s+/g, " ").trim()).filter(x => x && !RE_LIXO.test(x));
     const nome = pedacos.join(" ").trim();
     const sinal = vm[1] || vm[2] || "";
+    // Na Cora, "estornado" sem sinal é um pagamento que não chegou a sair: não mexe no saldo
+    if (!sinal && /estornad/i.test(junto)) continue;
     const saida = sinal ? /[\-−]/.test(sinal) : /enviad|pago|fatura|pagamento enviado|qr code|tarifa|d[eé]bito/i.test(op);
     itens.push({ data, tipo: saida ? "S" : "E", operacao: op || "Outro", nome: limparNome2(nome || op), cnpj: "", valor: brl2n(vm[3]) });
   }
@@ -152,7 +160,8 @@ function acharPaciente(pagador, pacs) {
 function regraBate(r, it) {
   if (!r || !r.cat) return false;
   if (r.tipo && r.tipo !== it.tipo) return false;
-  if (!r.contem && !r.op) return false;
+  const temValor = r.valor !== undefined && r.valor !== null && r.valor !== "" && +r.valor > 0;
+  if (!r.contem && !r.op && !temValor) return false;
   const n = normTxt(it.nome), op = normTxt(it.operacao), v = +it.valor || 0;
   if (r.contem && !n.includes(normTxt(r.contem))) return false;
   if (r.op && !op.includes(normTxt(r.op))) return false;
@@ -168,7 +177,7 @@ function aplicarRegras(it, cad, fase) {
   }
   return null;
 }
-const GRUPO_E = { "Reembolsos": "reemb", "Formação AB": "formacao", "CFGM": "cfgm", "Clínica Social": "clinica", "GM / Cursos extras": "gm",
+const GRUPO_E = { "Aula Aberta": "aula", "Intervisão": "inter", "Anuidades": "anuid", "Consultório": "consult", "Transferência entre contas": "transf", "Aplicação financeira": "transf", "Reembolsos": "reemb", "Formação AB": "formacao", "CFGM": "cfgm", "Clínica Social": "clinica", "GM / Cursos extras": "gm",
   "Link de cartão (Zoop)": "zoop", "Não identificado": "naoid" };
 
 // Classificação das entradas. grupo define o bloco da conferência semanal.
@@ -191,9 +200,10 @@ function classificar(it, cad) {
   if (metodoDe(it.operacao) === "Boleto") return R("cfgm", "CFGM", "Parcela CFGM (boleto)", { revisar: true, aviso: "Boleto de alguém fora do cadastro do CFGM" });
   const m = acharPaciente(it.nome, cad.pacientes);
   const esp = m ? +m.p.valor || 0 : 0;
-  // 35 a 70 é GM ou curso extra, a não ser que o paciente pague exatamente isso
-  if (v >= 35 && v <= 70 && !(m && m.score >= 30 && Math.abs(v - esp) < 0.5)) {
-    return R("gm", "GM / Cursos extras", "Grupo de movimento / curso extra", m && m.score >= 30 ? { aviso: `Nome parecido com ${m.p.nome}` } : {});
+  // 20 a 70: GM se a pessoa está cadastrada como GM; senão é Intervisão (a não ser que o paciente pague exatamente isso)
+  if (v >= 20 && v <= 70 && !(m && m.score >= 30 && Math.abs(v - esp) < 0.5)) {
+    if (m && m.score >= 30 && /^gm\b/.test(normTxt(m.p.nome))) return R("gm", "GM / Cursos extras", "Grupo de movimento / curso extra", { aviso: `Cadastro: ${m.p.nome}` });
+    return R("inter", "Intervisão", "Intervisão", m && m.score >= 30 ? { aviso: `Nome parecido com ${m.p.nome}` } : {});
   }
   if (m && m.score >= 30) {
     let aviso = "", rev = m.score < 50 || m.empate;
@@ -208,6 +218,8 @@ function classificar(it, cad) {
     } else if (rev) aviso = "Nome parecido. Confirme o paciente";
     return R("clinica", "Clínica Social", "Paciente clínica social", { pacId: m.p.id, revisar: rev, aviso });
   }
+  // Inscrição de aula aberta: R$ 100 ou R$ 120 de quem não é paciente da clínica
+  if (Math.abs(v - 100) < 0.01 || Math.abs(v - 120) < 0.01) return R("aula", "Aula Aberta", "Inscrição aula aberta");
   if (v >= 100 && v <= 250) return R("novo", "Clínica Social", "Possível paciente novo", { revisar: true, aviso: "Não está na lista de pacientes" });
   return R("naoid", "Não identificado", "Pagamento não identificado", { revisar: true });
 }
@@ -237,4 +249,4 @@ function classificarSaida(it, cad) {
 // Destino inicial na conferência
 function destIni(c) { return c.grupo === "clinica" ? "p:" + c.pacId : c.grupo === "novo" ? "pend" : "cat:" + c.cat; }
 
-if (typeof module !== "undefined") module.exports = { CATS, GRUPO_S, DEFAULT_CAD, parseExtrato, classificar, classificarSaida, regraBate, destIni, compDe, acharPaciente, scoreNome, metodoDe, nomeBate, normTxt };
+if (typeof module !== "undefined") module.exports = { CATS, GRUPO_S, NEUTRAS, DEFAULT_CAD, parseExtrato, classificar, classificarSaida, regraBate, destIni, compDe, acharPaciente, scoreNome, metodoDe, nomeBate, normTxt };

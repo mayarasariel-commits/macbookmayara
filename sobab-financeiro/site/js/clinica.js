@@ -61,7 +61,12 @@ const GRUPOS = [
   ["clinica", "Clínica Social", "Pacientes identificados.", "ok", false],
   ["formacao", "Formação AB", "Mensalidades e pagamentos trimestrais.", "ok", false],
   ["cfgm", "CFGM", "Boletos do curso.", "ok", false],
-  ["gm", "GM e cursos extras", "Entre R$ 35 e R$ 70.", "ok", false],
+  ["gm", "GM e cursos extras", "Pessoas cadastradas como GM.", "ok", false],
+  ["aula", "Aulas abertas", "Inscrições de R$ 100 ou R$ 120.", "ok", false],
+  ["inter", "Intervisão", "Entre R$ 20 e R$ 70, sem cadastro.", "ok", false],
+  ["anuid", "Anuidades", "", "ok", false],
+  ["consult", "Consultório", "Rateio de secretária e despesas do consultório.", "ok", false],
+  ["transf", "Transferências e aplicações", "Dinheiro mudando de conta: não é receita nem despesa.", "ok", false],
   ["zoop", "Maquininha e link de cartão", "", "ok", false],
   ["reemb", "Reembolsos", "Parcelamento (Jose Carlos) e contas compartilhadas.", "ok", false],
   ["saida", "Saídas", "", "ok", false]
@@ -134,7 +139,8 @@ async function aplicarImp() {
     if (i.acao === "conc") ok = await W(i.match.id, { conc: true, ...base });
     else if (i.acao === "prev") ok = await W(i.match.id, { status: "realizado", conc: true, data: i.data, mes: i.data.slice(0, 7), pessoa: i.match.pessoa || i.nome, pagoEm: i.data, ...base });
     else ok = await W(novoId(), { data: i.data, mes: i.data.slice(0, 7), tipo: i.tipo, desc: f.criado ? "Paciente clínica social" : i.desc, pessoa: i.nome, operacao: i.operacao, valor: i.valor,
-      metodo: metodoDe(i.operacao), status: "realizado", conc: true, origem: "importacao", aprov: "", obs: i.aviso || "", criadoEm: new Date().toISOString(), ...base }, true);
+      metodo: metodoDe(i.operacao), status: "realizado", conc: true, origem: "importacao", aprov: "", obs: i.aviso || "", criadoEm: new Date().toISOString(),
+      ...(contas() ? { conta: contaConc(i.data.slice(0, 7)) } : {}), ...base }, true);
     if (!ok) continue;
     r.n++;
     if (clin) { r.comps.add(i.comp); if (f.pacId) r.clin++; else r.pend++; }
@@ -142,7 +148,7 @@ async function aplicarImp() {
     if (f.cat === "Não identificado") { r.naoid++; r.comps.add(compDe(i.data, CAD.corte)); }
   }
   const porMes = {}; Object.entries(imp.saldos || {}).forEach(([d, v]) => { (porMes[d.slice(0, 7)] = porMes[d.slice(0, 7)] || {})[d] = v; });
-  for (const [m, sc] of Object.entries(porMes)) await WM(m, { saldosCora: { ...((MESES[m] || {}).saldosCora || {}), ...sc } });
+  for (const [m, sc] of Object.entries(porMes)) await gravarSaldosBanco(m, contas() ? contaConc(m) : null, sc);
   if (cadMudou) await salvarPacs(true);
   UI.imp = null; UI.lastRes = { ...r, comps: [...r.comps].sort() };
   toast(r.n + " movimentos salvos"); render();
@@ -259,15 +265,72 @@ document.addEventListener("click", async e => {
 });
 
 // ---------- Aba: Relatórios separados por receita ----------
-const RELS = [["resumo", "Resumo do mês"], ["clin", "Clínica Social"], ["form", "Formação AB"], ["cfgm", "CFGM"], ["gm", "GM e cursos extras"], ["zoop", "Maquininha"], ["reemb", "Reembolsos"], ["ni", "Não identificados"]];
+const RELS = [["resumo", "Resumo do mês"], ["rep", "Repasses e professores"], ["clin", "Clínica Social"], ["form", "Formação AB"], ["cfgm", "CFGM"], ["gm", "GM e cursos extras"], ["zoop", "Maquininha"], ["reemb", "Reembolsos"], ["ni", "Não identificados"]];
 const ST_MENS = { pago: "Pago", parcial: "Parcial", aberto: "Em aberto", na: "Sem parcela no mês" };
 // Formação e CFGM usam o mês de referência (ref) quando a mensalidade foi paga em outro mês
 const lancsCat = (cats, m) => L.filter(x => (x.ref || x.mes) === m).filter(x => x.tipo === "E" && x.status === "realizado" && cats.includes(x.cat)).sort((a, b) => a.data.localeCompare(b.data));
 const tabPagamentos = (titulo, its) => ({ titulo, cols: ["Data", "Quem pagou", "Descrição", "Valor"], money: [3], total: true, rows: its.map(x => [dFull(x.data), x.pessoa || "", x.desc || "", +x.valor]) });
 
+// ---------- Conferência de repasses: devido x pago ----------
+// Terapeutas: a competência m (pagamentos de pacientes do dia 16 de m ao dia 15 de m+1) é repassada no mês seguinte.
+const PCT = () => ((CAD.clinica || {}).terapeutas || 85) / 100;
+// Também vale o nome entre parênteses do cadastro: "Ana (Maria Souza)" bate com quem recebe como Maria Souza
+const mesmaPessoa = (pagou, nome) => [nome, ...((String(nome || "").match(/\(([^)]+)\)/) || []).slice(1))].some(n => { const sc = scoreNome(pagou, n); return sc >= 50 || (sc >= 30 && tkNome(n).length === 1); });
+const situacao = dif => Math.abs(dif) < 1 ? "Conferido" : dif > 0 ? "Pago a menos" : "Pago a mais";
+// Devido: "Total a receber" da planilha da clínica (CAD.repasses) quando existe; senão 85% do que os pacientes pagaram.
+function conferenciaTerapeutas(comp) {
+  const mesPg = addMes(comp, 1), porT = {}, planilha = (CAD.repasses || []).filter(r => r.comp === comp);
+  for (const r of planilha) porT[r.nome] = { nome: r.nome, n: 0, rec: 0, pago: 0, datas: [], devidoPlanilha: +r.devido || 0 };
+  for (const x of linhasClin(comp)) {
+    if (!x.rec) continue; const t = x.p.terapeuta || "Sem terapeuta";
+    const alvo = planilha.length ? Object.values(porT).find(o => mesmaPessoa(t, o.nome) || mesmaPessoa(o.nome, t)) : null;
+    const o = alvo || (porT[t] = porT[t] || { nome: t, n: 0, rec: 0, pago: 0, datas: [] }); o.n++; o.rec += x.rec;
+  }
+  const pagos = doMes(mesPg).filter(x => x.tipo === "S" && x.status === "realizado" && x.cat === "Terapeutas");
+  const sobra = [];
+  for (const x of pagos) {
+    const alvo = Object.values(porT).find(o => mesmaPessoa(x.pessoa, o.nome));
+    if (alvo) { alvo.pago += +x.valor || 0; alvo.datas.push(dBR(x.data)); } else sobra.push(x);
+  }
+  const extras = {};
+  for (const x of sobra) { const k = x.pessoa || x.desc; const o = extras[k] = extras[k] || { nome: k, n: 0, rec: 0, pago: 0, datas: [], semPrevisao: true }; o.pago += +x.valor || 0; o.datas.push(dBR(x.data)); }
+  return [...Object.values(porT), ...Object.values(extras)].map(o => {
+    const devido = o.devidoPlanilha !== undefined ? o.devidoPlanilha : planilha.length && !o.semPrevisao ? 0 : Math.round(o.rec * PCT() * 100) / 100;
+    return { ...o, devido, fonte: o.devidoPlanilha !== undefined ? "planilha" : "calculo", dif: Math.round((devido - o.pago) * 100) / 100 }; })
+    .sort((a, b) => a.nome.localeCompare(b.nome));
+}
+// Professores: o devido de cada mês fica em Cadastros (CAD.professores) e é comparado ao que saiu no mesmo mês
+function conferenciaProfessores(m) {
+  const cats = ["Professores", "Professores Formação", "Professores CFGM", "Professores Aula Aberta"];
+  const pagos = doMes(m).filter(x => x.tipo === "S" && x.status === "realizado" && cats.includes(x.cat)), usados = new Set();
+  const linhas = (CAD.professores || []).filter(p => p.mes === m).map(p => {
+    const pg = pagos.filter(x => !usados.has(x.id) && mesmaPessoa(x.pessoa, p.nome)); pg.forEach(x => usados.add(x.id));
+    const pago = sum(pg), devido = +p.devido || 0;
+    return { nome: p.nome, funcao: p.funcao || "", devido, pago, datas: pg.map(x => dBR(x.data)).join(", "), dif: Math.round((devido - pago) * 100) / 100 };
+  });
+  for (const x of pagos.filter(x => !usados.has(x.id))) linhas.push({ nome: x.pessoa || x.desc, funcao: x.cat, devido: 0, pago: +x.valor, datas: dBR(x.data), dif: -(+x.valor), semPrevisao: true });
+  return linhas;
+}
+
 function dadosRel(r, m, f) {
   f = f || "todos";
   if (r === "resumo") return dadosResumo(m);
+  if (r === "rep") {
+    const comp = addMes(m, -1), t = conferenciaTerapeutas(comp), pr = conferenciaProfessores(m);
+    const tot = (a, k) => a.reduce((s, x) => s + (+x[k] || 0), 0);
+    return {
+      titulo: "Repasses e professores", periodo: `Pagos em ${mesNome(m)}. Terapeutas: competência ${mesNome(comp)}`,
+      kpis: [["Devido aos terapeutas", tot(t, "devido"), t.some(x => x.fonte === "planilha") ? "planilha da clínica" : `${Math.round(PCT() * 100)}% do recebido`, 1], ["Pago aos terapeutas", tot(t, "pago"), mesNome(m), 1],
+        ["Devido aos professores", tot(pr, "devido"), "pela planilha de cálculo", 1], ["Pago aos professores", tot(pr, "pago"), mesNome(m), 1],
+        ["Para conferir", [...t, ...pr].filter(x => Math.abs(x.dif) >= 1).length, "pessoas com diferença", 0]],
+      tabelas: [
+        { titulo: `Terapeutas · competência ${mesNome(comp)}`, cols: ["Terapeuta", "Pacientes pagos", "Recebido", "Devido", "Pago", "Datas", "Diferença", "Situação"], money: [2, 3, 4, 6], total: true,
+          rows: t.map(x => [x.nome, x.n || "", x.rec || "", x.devido, x.pago || "", x.datas.join(", "), x.dif, x.semPrevisao ? "Pago sem valor devido na competência" : situacao(x.dif)]) },
+        { titulo: `Professores · ${mesNome(m)}`, cols: ["Professor", "Função", "Devido", "Pago", "Datas", "Diferença", "Situação"], money: [2, 3, 5], total: true,
+          rows: pr.map(x => [x.nome, x.funcao, x.devido || "", x.pago || "", x.datas, x.dif, x.semPrevisao ? "Pago sem previsão no cadastro" : situacao(x.dif)]) }
+      ]
+    };
+  }
   if (r === "clin") {
     const [ini, fim] = janela(m), lin = linhasClin(m), cl = clinica(m), ni = naoIdent(m);
     const porT = {};

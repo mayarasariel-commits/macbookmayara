@@ -45,7 +45,9 @@ test("entrada: aluno, CFGM, paciente, GM, não identificado", () => {
   assert.equal(p.cat, "Clínica Social"); assert.equal(p.pacId, "p1"); assert.equal(p.revisar, false);
   const ant = R.classificar(it("E", "CARLOS FICTICIO", 600), CAD);
   assert.equal(ant.mult, 3, "múltiplo exato vira pagamento antecipado");
-  assert.equal(R.classificar(it("E", "ZEZINHO QUALQUER", 50), CAD).cat, "GM / Cursos extras");
+  assert.equal(R.classificar(it("E", "ZEZINHO QUALQUER", 50), CAD).cat, "Intervisão");
+  assert.equal(R.classificar(it("E", "ZEZINHO QUALQUER", 100), CAD).cat, "Aula Aberta");
+  assert.equal(R.classificar(it("E", "ZEZINHO QUALQUER", 120), CAD).cat, "Aula Aberta");
   assert.equal(R.classificar(it("E", "ZEZINHO QUALQUER", 999), CAD).cat, "Não identificado");
   assert.equal(R.classificar(it("E", "REEMBOLSADOR SA", 999), CAD).cat, "Reembolsos");
 });
@@ -71,6 +73,17 @@ test("saída: repasse no dia do repasse, professores e fase depois", () => {
   // terapeuta fora do dia do repasse: a regra "depois" vale
   assert.equal(c(it("S", "DORA MODELO", 120, "2026-10-25")).desc, "Reembolso");
   assert.equal(c(it("S", "NINGUEM CONHECIDO", 80)).cat, "Outras saídas");
+});
+
+test("estorno sem sinal na Cora não mexe no saldo", () => {
+  const r = R.parseExtrato("30/06/2026\nFULANO\tPagamento QR Code Pix\t30/06/2026\t- R$ 655,11\nFULANO\tPagamento QR Code Pix estornado\t30/06/2026\tR$ 655,11\n");
+  assert.equal(r.itens.length, 1);
+  assert.equal(r.itens[0].tipo, "S");
+});
+
+test("transferência entre contas e aplicação não são receita nem despesa", () => {
+  assert.ok(R.NEUTRAS.has("Transferência entre contas") && R.NEUTRAS.has("Aplicação financeira"));
+  assert.equal(R.GRUPO_S["Transferência entre contas"], "Transferências");
 });
 
 test("regra precisa de algum critério e de categoria", () => {

@@ -23,14 +23,39 @@ const doMes = m => L.filter(x => x.mes === m);
 const sum = (a, f = () => true) => a.filter(f).reduce((s, x) => s + (+x.valor || 0), 0);
 const sinal = x => x.tipo === "E" ? +x.valor : -x.valor;
 function grupoS(c) { return GRUPO_S[c] || "Variáveis"; }
+// ----- Contas bancárias -----
+// Com CAD.contas preenchido, cada conta tem saldo próprio (conferido com o extrato dela)
+// e o caixa da SOBAB é a soma das contas. Sem contas, vale o modo antigo de saldo único.
+const contas = () => (CAD.contas && CAD.contas.length ? CAD.contas : null);
+const contaDe = x => x.conta || "cora";
+const nomeConta = id => { const c = (contas() || []).find(k => k.id === id); return c ? c.nome : id; };
+const ehNeutro = x => NEUTRAS.has(x.cat);
+const fimDoMes = m => `${m}-${String(new Date(+m.slice(0, 4), +m.slice(5), 0).getDate()).padStart(2, "0")}`;
+const contaAtiva = () => { const cs = contas(); if (!cs) return "cora"; return (cs.find(c => !c.encerrada) || cs[cs.length - 1]).id; };
+function saldoContaAte(id, dia) {
+  const c = (contas() || []).find(k => k.id === id);
+  return (c ? +c.saldoInicial || 0 : 0) + L.filter(x => contaDe(x) === id && x.status === "realizado" && x.data <= dia && (!c || !c.desde || x.data >= c.desde))
+    .reduce((s, x) => s + sinal(x), 0);
+}
+const saldoContasAte = dia => contas().reduce((s, c) => s + saldoContaAte(c.id, dia), 0);
 function saldoIni(m, guard = 0) {
+  if (contas()) return saldoContasAte(fimDoMes(addMes(m, -1)));
   const md = MESES[m]; if (md && typeof md.saldoInicial === "number") return md.saldoInicial;
   if (guard > 36) return 0; const p = addMes(m, -1);
   const temAntes = Object.keys(MESES).some(k => k <= p) || L.some(x => x.mes <= p);
   return temAntes ? saldoFim(p, guard + 1) : 0;
 }
-function saldoFim(m, g = 0) { return saldoIni(m, g) + doMes(m).filter(x => x.status === "realizado").reduce((s, x) => s + sinal(x), 0); }
-function saldoAte(m, dia) { return saldoIni(m) + doMes(m).filter(x => x.status === "realizado" && x.data <= dia).reduce((s, x) => s + sinal(x), 0); }
+function saldoFim(m, g = 0) { return contas() ? saldoContasAte(fimDoMes(m)) : saldoIni(m, g) + doMes(m).filter(x => x.status === "realizado").reduce((s, x) => s + sinal(x), 0); }
+function saldoAte(m, dia) { return contas() ? saldoContasAte(dia) : saldoIni(m) + doMes(m).filter(x => x.status === "realizado" && x.data <= dia).reduce((s, x) => s + sinal(x), 0); }
+// Saldo do dia informado pelo banco, por conta. O campo antigo saldosCora vale como conta "cora".
+function saldosBanco(m) { const md = MESES[m] || {}; const o = { ...(md.saldosBanco || {}) }; if (md.saldosCora) o.cora = { ...md.saldosCora, ...(o.cora || {}) }; return o; }
+// Contas com movimento ou saldo informado no mês
+function contasDoMes(m) {
+  const cs = contas(); if (!cs) return [];
+  const sb = saldosBanco(m);
+  return cs.filter(c => doMes(m).some(x => contaDe(x) === c.id) || Object.keys(sb[c.id] || {}).length);
+}
+function contaConc(m) { const us = contasDoMes(m); return ((us.find(c => c.id === UI.conta) || us.find(c => c.id === contaAtiva()) || us[0] || {}).id) || contaAtiva(); }
 function meses() {
   const set = new Set([hoje().slice(0, 7), ...Object.keys(MESES), ...L.map(x => x.mes)]);
   if (UI.mes) set.add(UI.mes);
@@ -46,19 +71,23 @@ function mensal(m) {
     return { nome: a.nome, esp: antes ? 0 : a.valor, rec, datas: pg.map(p => dBR(p.data)).join(", "), st: antes ? (rec ? "pago" : "na") : rec >= a.valor * 0.95 ? "pago" : rec > 0 ? "parcial" : "aberto" }; });
   return { fo, cf };
 }
-function diasConc(m) {
-  const ds = new Set(doMes(m).filter(x => x.status === "realizado").map(x => x.data));
-  const sc = (MESES[m] && MESES[m].saldosCora) || {}; Object.keys(sc).forEach(d => ds.add(d));
-  return [...ds].sort().reverse().map(d => { const its = doMes(m).filter(x => x.data === d && x.status === "realizado");
-    const sis = saldoAte(m, d); const cora = typeof sc[d] === "number" ? sc[d] : null;
+// Conferência dia a dia de uma conta: saldo do sistema x saldo do banco
+function diasConc(m, conta) {
+  const multi = !!contas(); conta = multi ? (conta || contaConc(m)) : null;
+  const real = doMes(m).filter(x => x.status === "realizado" && (!multi || contaDe(x) === conta));
+  const ds = new Set(real.map(x => x.data));
+  const sc = multi ? (saldosBanco(m)[conta] || {}) : ((MESES[m] && MESES[m].saldosCora) || {}); Object.keys(sc).forEach(d => ds.add(d));
+  return [...ds].sort().reverse().map(d => { const its = real.filter(x => x.data === d);
+    const sis = multi ? saldoContaAte(conta, d) : saldoAte(m, d); const cora = typeof sc[d] === "number" ? sc[d] : null;
     return { d, its, sis, cora, dif: cora === null ? null : Math.round((cora - sis) * 100) / 100, nc: its.filter(x => !x.conc).length }; });
 }
+const diasComDiferenca = m => (contas() ? contasDoMes(m).map(c => c.id) : [null]).reduce((n, c) => n + diasConc(m, c).filter(d => d.dif !== null && Math.abs(d.dif) >= 0.01).length, 0);
 function pend(m) {
   const its = doMes(m);
   return { rev: its.filter(x => x.revisar).length,
     aprov: its.filter(x => x.tipo === "S" && x.status === "previsto" && x.aprov === "pendente").length,
     nconc: its.filter(x => x.status === "realizado" && !x.conc).length,
-    dif: diasConc(m).filter(d => d.dif !== null && Math.abs(d.dif) >= 0.01).length,
+    dif: diasComDiferenca(m),
     abertos: mensal(m).fo.filter(a => a.st === "aberto" || a.st === "parcial").length + mensal(m).cf.filter(a => a.st !== "pago").length };
 }
 function clinica(m) { const b = L.filter(x => x.tipo === "E" && x.cat === "Clínica Social" && x.status === "realizado").reduce((s, x) => s + valorNaComp(x, m), 0); const p = CAD.clinica || { sobab: 10, poupanca: 5, terapeutas: 85 };
@@ -75,6 +104,16 @@ async function W(id, patch, create) {
 async function WM(m, patch) {
   try { await db.collection("meses").doc(m).set({ ...(MESES[m] || {}), ...patch }); return true; }
   catch (e) { toast(semPermissao(e) ? "Seu acesso não permite alterar o mês." : "Não foi possível salvar o mês."); return false; }
+}
+// Saldo do dia do banco: por conta quando há várias contas, no campo antigo (saldosCora) quando há uma só
+async function gravarSaldosBanco(m, conta, saldos) {
+  if (!conta) return WM(m, { saldosCora: { ...((MESES[m] || {}).saldosCora || {}), ...saldos } });
+  const sb = saldosBanco(m); return WM(m, { saldosBanco: { ...sb, [conta]: { ...(sb[conta] || {}), ...saldos } } });
+}
+async function gravarSaldoDia(m, conta, dia, v) {
+  if (!conta) { const sc = { ...((MESES[m] || {}).saldosCora || {}) }; if (v === null) delete sc[dia]; else sc[dia] = v; return WM(m, { saldosCora: sc }); }
+  const sb = saldosBanco(m), sc = { ...(sb[conta] || {}) }; if (v === null) delete sc[dia]; else sc[dia] = v;
+  return WM(m, { saldosBanco: { ...sb, [conta]: sc } });
 }
 const novoId = () => "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -120,10 +159,13 @@ function catOpts(tipo, cur) { return CATS[tipo].map(c => `<option ${c === cur ? 
 
 function vPainel() {
   const m = UI.mes, its = doMes(m), real = its.filter(x => x.status === "realizado");
-  const ini = saldoIni(m), e = sum(real, x => x.tipo === "E"), s = sum(real, x => x.tipo === "S"), fim = ini + e - s;
+  // Transferências entre contas e aplicações mexem no saldo, mas não são receita nem despesa
+  const ini = saldoIni(m), e = sum(real, x => x.tipo === "E" && !ehNeutro(x)), s = sum(real, x => x.tipo === "S" && !ehNeutro(x));
+  const nt = real.filter(ehNeutro).reduce((t, x) => t + sinal(x), 0), fim = ini + e - s + nt;
+  const porConta = contasDoMes(m).length > 1 ? contasDoMes(m).map(c => `${c.nome} ${R$(saldoContaAte(c.id, fimDoMes(m) < hoje() ? fimDoMes(m) : hoje()))}`).join(" · ") : "";
   const prevS = sum(its, x => x.tipo === "S" && x.status === "previsto" && x.aprov !== "reprovado"), prevE = sum(its, x => x.tipo === "E" && x.status === "previsto");
   const p = pend(m), dc = diasConc(m), ult = dc.find(d => d.cora !== null);
-  const byE = CATS.E.map(c => [c, sum(real, x => x.tipo === "E" && x.cat === c)]).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
+  const byE = CATS.E.filter(c => !NEUTRAS.has(c)).map(c => [c, sum(real, x => x.tipo === "E" && x.cat === c)]).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
   const byS = ["Repasses", "Fixas", "Variáveis"].map(g => [g, sum(real, x => x.tipo === "S" && grupoS(x.cat) === g)]);
   const maxB = Math.max(1, ...byE.map(x => x[1]), ...byS.map(x => x[1]));
   const bar = (l, v, c) => `<div class="barrow"><span>${esc(l)}</span><div class="track"><div class="fill" style="width:${(v / maxB * 100).toFixed(1)}%;background:${c}"></div></div><span class="num">${R$(v)}</span></div>`;
@@ -131,21 +173,21 @@ function vPainel() {
   if (p.aprov && canApprove) pl.push(`<li><span><b>${p.aprov}</b> pagamentos aguardando aprovação da diretoria</span><button class="pri" data-go="pagar">Ver e aprovar</button></li>`);
   if (canWrite) {
     if (p.rev) pl.push(`<li><span><b>${p.rev}</b> lançamentos com categoria sugerida para revisar</span><button data-go="lanc" data-rev="1">Revisar</button></li>`);
-    if (p.dif) pl.push(`<li><span><b>${p.dif}</b> dias com diferença entre sistema e Cora</span><button data-go="conc">Conciliar</button></li>`);
+    if (p.dif) pl.push(`<li><span><b>${p.dif}</b> dias com diferença entre sistema e banco</span><button data-go="conc">Conciliar</button></li>`);
     if (p.nconc) pl.push(`<li><span><b>${p.nconc}</b> lançamentos realizados ainda sem conferência no extrato</span><button data-go="lanc" data-nconc="1">Ver</button></li>`);
   }
   if (p.abertos) pl.push(`<li><span><b>${p.abertos}</b> mensalidades/parcelas em aberto no mês</span><button data-go="mens">Ver alunos</button></li>`);
   return `
   <div class="kpis">
-    <div class="kpi"><span>Saldo inicial</span><b class="num">${R$(ini)}</b><em>${MESES[m] && typeof MESES[m].saldoInicial === "number" ? "informado" : "herdado do mês anterior"}</em></div>
-    <div class="kpi"><span>Entradas</span><b class="num in">${R$(e)}</b><em>${real.filter(x => x.tipo === "E").length} recebimentos</em></div>
-    <div class="kpi"><span>Saídas</span><b class="num out">${R$(s)}</b><em>${real.filter(x => x.tipo === "S").length} pagamentos</em></div>
-    <div class="kpi"><span>Saldo atual</span><b class="num">${R$(fim)}</b><em>${ult ? (Math.abs(ult.dif) < 0.01 ? "bate com a Cora em " + dBR(ult.d) : "Cora " + dBR(ult.d) + ": " + R$(ult.cora)) : "sem saldo Cora informado"}</em></div>
+    <div class="kpi"><span>Saldo inicial</span><b class="num">${R$(ini)}</b><em>${contas() ? "soma das contas" : MESES[m] && typeof MESES[m].saldoInicial === "number" ? "informado" : "herdado do mês anterior"}</em></div>
+    <div class="kpi"><span>Entradas</span><b class="num in">${R$(e)}</b><em>${real.filter(x => x.tipo === "E" && !ehNeutro(x)).length} recebimentos</em></div>
+    <div class="kpi"><span>Saídas</span><b class="num out">${R$(s)}</b><em>${real.filter(x => x.tipo === "S" && !ehNeutro(x)).length} pagamentos${Math.abs(nt) >= 0.01 ? ` · transferências ${R$(nt)}` : ""}</em></div>
+    <div class="kpi"><span>Saldo atual</span><b class="num">${R$(fim)}</b><em>${porConta || (ult ? (Math.abs(ult.dif) < 0.01 ? "bate com o banco em " + dBR(ult.d) : "banco " + dBR(ult.d) + ": " + R$(ult.cora)) : "sem saldo do banco informado")}</em></div>
     <div class="kpi"><span>A pagar no mês</span><b class="num out">${R$(prevS)}</b><em>saldo projetado ${R$(fim + prevE - prevS)}</em></div>
   </div>
   <div class="panel"><div class="ph"><div><h2>${canWrite ? "Pendências" : "O que precisa da sua atenção"} em ${mesNome(m)}</h2><p>${canWrite ? "O que precisa de ação para o caixa ficar fechado e confiável." : "Aprovações e mensalidades em aberto no mês."}</p></div><button class="pri w" data-novo="1">Novo lançamento</button></div>
     ${pl.length ? `<ul class="list">${pl.join("")}</ul>` : '<div class="empty">Nenhuma pendência neste mês.</div>'}</div>
-  <div class="panel"><div class="ph"><div><h2>Saldo dia a dia</h2><p>Saldo do sistema; pontos marcam os dias com saldo Cora informado.</p></div></div>${chartSaldo(m)}</div>
+  <div class="panel"><div class="ph"><div><h2>Saldo dia a dia</h2><p>Saldo do caixa${contas() ? " (soma das contas)" : ""}; pontos marcam os dias com saldo do banco informado.</p></div></div>${chartSaldo(m)}</div>
   <div class="grid2">
     <div class="panel"><h3 style="margin-bottom:12px">Entradas por origem</h3><div class="bars">${byE.length ? byE.map(([c, v]) => bar(c, v, "var(--in)")).join("") : '<div class="empty">Sem entradas realizadas no mês.</div>'}</div></div>
     <div class="panel"><h3 style="margin-bottom:12px">Saídas por grupo</h3><div class="bars">${byS.map(([c, v]) => bar(c === "Repasses" ? "Terapeutas e professores" : c === "Fixas" ? "Despesas fixas" : "Despesas variáveis", v, "var(--out)")).join("")}</div></div>
@@ -155,7 +197,7 @@ function chartSaldo(m) {
   const dias = [...new Set(doMes(m).filter(x => x.status === "realizado").map(x => x.data))].sort();
   if (dias.length < 2) return '<div class="empty">O gráfico aparece quando houver movimentação em pelo menos dois dias.</div>';
   const pts = [[m + "-01", saldoIni(m)], ...dias.map(d => [d, saldoAte(m, d)])];
-  const sc = (MESES[m] && MESES[m].saldosCora) || {};
+  const cm = contasDoMes(m), sc = contas() ? (cm.length === 1 ? saldosBanco(m)[cm[0].id] || {} : {}) : (MESES[m] && MESES[m].saldosCora) || {};
   const vals = pts.map(p => p[1]); let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * .15 || 1000; lo -= pad; hi += pad;
   const W0 = 700, H0 = 150, l = 64, r = 8, t = 8, b = 22; const X = d => l + ((+d.slice(8)) - 1) / 30 * (W0 - l - r); const Y = v => t + (hi - v) / (hi - lo) * (H0 - t - b);
   let path = ""; pts.forEach((p, i) => { const x = X(p[0]), y = Y(p[1]); path += (i ? ` H${x.toFixed(1)} V${y.toFixed(1)}` : `M${x.toFixed(1)} ${y.toFixed(1)}`); });
@@ -186,7 +228,7 @@ function vLanc() {
   </div>
   <div class="tblwrap"><table><thead><tr><th>Data</th><th>Pessoa / descrição</th><th>Categoria</th><th>Situação</th><th class="r">Valor</th><th class="w"></th></tr></thead><tbody>
   ${rows.map(x => `<tr class="${x.revisar && canWrite ? "rev" : ""}"><td class="num">${dBR(x.data)}</td>
-    <td><div class="who">${esc(x.pessoa || x.desc)}<small>${esc(x.pessoa ? x.desc : "")}${x.obs ? " · " + esc(x.obs) : ""}</small></div></td>
+    <td><div class="who">${esc(x.pessoa || x.desc)}<small>${esc(x.pessoa ? x.desc : "")}${x.obs ? " · " + esc(x.obs) : ""}${contasDoMes(UI.mes).length > 1 ? " · " + esc(nomeConta(contaDe(x))) : ""}</small></div></td>
     <td>${canWrite ? `<select data-cat="${x.id}" aria-label="Categoria">${catOpts(x.tipo, x.cat)}</select>${x.revisar ? ` <button class="ghost w" data-ok="${x.id}" title="Confirmar categoria">✓</button>` : ""}` : esc(x.cat)}</td>
     <td>${chipSt(x)}</td><td class="r num ${x.tipo === "E" ? "in" : "out"}">${x.tipo === "E" ? "+" : "−"} ${R$(x.valor)}</td>
     <td class="w"><button class="ghost w" data-ed="${x.id}">Editar</button></td></tr>`).join("") || `<tr><td colspan="6" class="empty">Nenhum lançamento neste filtro.</td></tr>`}
@@ -194,18 +236,19 @@ function vLanc() {
 }
 
 function vConc() {
-  const m = UI.mes, dc = diasConc(m), imp = UI.imp;
-  const iniRow = `Saldo inicial do mês: <b class="num">${R$(saldoIni(m))}</b>`;
+  const m = UI.mes, conta = contas() ? contaConc(m) : null, dc = diasConc(m, conta), imp = UI.imp, banco = conta ? nomeConta(conta) : "Cora";
+  const iniRow = conta ? `Saldo da conta ${esc(banco)} no início do mês: <b class="num">${R$(saldoContaAte(conta, fimDoMes(addMes(m, -1))))}</b>` : `Saldo inicial do mês: <b class="num">${R$(saldoIni(m))}</b>`;
+  const cm = contasDoMes(m), seletor = cm.length > 1 ? `<div class="filters fbar"><span class="flab">Conta</span><div class="seg" role="group" aria-label="Conta">${cm.map(c => `<button data-conta="${c.id}" aria-pressed="${c.id === conta}">${esc(c.nome)}</button>`).join("")}</div></div>` : "";
   return `<div class="panel"><div class="ph"><div><h2>Importar movimentação da Cora</h2><p>Cole o texto do extrato mensal. O sistema confere o que já está lançado e propõe o resto.</p></div></div>
     <div class="drop"><b>Texto do extrato (PDF da Cora)</b><textarea id="impTxt" placeholder="Abra o PDF do extrato, copie tudo (Ctrl+A, Ctrl+C) e cole aqui."></textarea><button class="pri w" id="impTxtGo">Conferir texto</button></div>
     ${imp ? vImp(imp) : ""}
   </div>
-  <div class="panel"><div class="ph"><div><h2>Conciliação de ${mesNome(m)}</h2><p>${iniRow}. Informe o saldo do dia que aparece no app da Cora; a diferença tem que ficar em zero.</p></div></div>
-    <div class="days">${dc.length ? dc.map(d => `<details class="day" ${UI.open === d.d ? "open" : ""} data-day="${d.d}"><summary>
+  <div class="panel"><div class="ph"><div><h2>Conciliação de ${mesNome(m)}</h2><p>${iniRow}. Informe o saldo do dia que aparece no extrato; a diferença tem que ficar em zero.</p></div></div>
+    ${seletor}<div class="days">${dc.length ? dc.map(d => `<details class="day" ${UI.open === d.d ? "open" : ""} data-day="${d.d}"><summary>
       <b class="num">${dBR(d.d)}</b>
       <span class="who"><small>Sistema</small><span class="num">${R$(d.sis)}</span></span>
-      <span class="who"><small>Cora</small><input type="number" step="0.01" class="num w" data-sc="${d.d}" value="${d.cora ?? ""}" placeholder="saldo do dia" style="max-width:130px" aria-label="Saldo Cora em ${dBR(d.d)}"></span>
-      <span>${d.dif === null ? '<span class="chip">Sem saldo Cora</span>' : Math.abs(d.dif) < 0.01 ? '<span class="chip ok">Bate</span>' : `<span class="chip bad">Diferença ${R$(d.dif)}</span>`}</span>
+      <span class="who"><small>${esc(banco)}</small><input type="number" step="0.01" class="num w" data-sc="${d.d}" value="${d.cora ?? ""}" placeholder="saldo do dia" style="max-width:130px" aria-label="Saldo ${esc(banco)} em ${dBR(d.d)}"></span>
+      <span>${d.dif === null ? '<span class="chip">Sem saldo do banco</span>' : Math.abs(d.dif) < 0.01 ? '<span class="chip ok">Bate</span>' : `<span class="chip bad">Diferença ${R$(d.dif)}</span>`}</span>
       <span>${d.nc ? `<span class="chip warn">${d.nc} a conferir</span>` : `<span class="chip ok">${d.its.length} conferidos</span>`}</span></summary>
       <div class="inner"><div class="tblwrap"><table><tbody>${d.its.map(x => `<tr><td><input type="checkbox" class="w" data-cc="${x.id}" ${x.conc ? "checked" : ""} aria-label="Conciliado"></td><td><div class="who">${esc(x.pessoa || x.desc)}<small>${esc(x.cat)}</small></div></td><td class="r num ${x.tipo === "E" ? "in" : "out"}">${x.tipo === "E" ? "+" : "−"} ${R$(x.valor)}</td></tr>`).join("") || '<tr><td class="empty">Sem lançamentos realizados neste dia.</td></tr>'}</tbody></table></div></div></details>`).join("") : '<div class="empty">Ainda não há movimentação neste mês. Importe o extrato ou registre um lançamento.</div>'}</div>
   </div>`;
@@ -253,12 +296,14 @@ function vMens() {
 
 function fech(m) {
   const its = doMes(m), real = its.filter(x => x.status === "realizado");
-  const E = real.filter(x => x.tipo === "E"), S = real.filter(x => x.tipo === "S");
+  // Transferências entre contas e aplicações ficam fora de entradas e despesas, numa linha própria
+  const E = real.filter(x => x.tipo === "E" && !ehNeutro(x)), S = real.filter(x => x.tipo === "S" && !ehNeutro(x));
   const g = k => S.filter(x => grupoS(x.cat) === k);
+  const nt = real.filter(ehNeutro).reduce((t, x) => t + sinal(x), 0);
   const ini = saldoIni(m), te = sum(E), fx = sum(g("Fixas")), vr = sum(g("Variáveis")), rp = sum(g("Repasses"));
-  const fim = ini + te - fx - vr - rp; const dc = diasConc(m); const lastC = dc.find(d => d.cora !== null);
-  return { its, real, E, S, ini, te, fx, vr, rp, fim, lastC, cl: clinica(m), byE: CATS.E.map(c => [c, sum(E, x => x.cat === c)]).filter(x => x[1]),
-    byS: CATS.S.map(c => [c, grupoS(c), sum(S, x => x.cat === c)]).filter(x => x[2]), dc, mens: mensal(m) };
+  const fim = ini + te - fx - vr - rp + nt; const conta = contas() ? contaConc(m) : null; const dc = diasConc(m, conta); const lastC = dc.find(d => d.cora !== null);
+  return { its, real, E, S, ini, te, fx, vr, rp, nt, fim, lastC, banco: conta ? nomeConta(conta) : "Cora", cl: clinica(m), byE: CATS.E.filter(c => !NEUTRAS.has(c)).map(c => [c, sum(E, x => x.cat === c)]).filter(x => x[1]),
+    byS: CATS.S.filter(c => !NEUTRAS.has(c)).map(c => [c, grupoS(c), sum(S, x => x.cat === c)]).filter(x => x[2]), dc, mens: mensal(m) };
 }
 function vFech() {
   const m = UI.mes, F = fech(m); const md = MESES[m] || {};
@@ -271,8 +316,9 @@ function vFech() {
      <span>(−) Despesas fixas</span><span class="num out">${R$(F.fx)}</span>
      <span>(−) Despesas variáveis</span><span class="num out">${R$(F.vr)}</span>
      <span>(−) Terapeutas e professores</span><span class="num out">${R$(F.rp)}</span>
+     ${Math.abs(F.nt) >= 0.01 ? `<span>(±) Transferências entre contas e aplicações</span><span class="num">${R$(F.nt)}</span>` : ""}
      <span class="tot">(=) Saldo final</span><span class="tot num">${R$(F.fim)}</span>
-     <span>Saldo Cora ${F.lastC ? "em " + dBR(F.lastC.d) : ""}</span><span class="num">${F.lastC ? R$(F.lastC.cora) : "não informado"}</span>
+     <span>Saldo ${esc(F.banco)} ${F.lastC ? "em " + dBR(F.lastC.d) : ""}</span><span class="num">${F.lastC ? R$(F.lastC.cora) : "não informado"}</span>
      <span>Situação</span><span>${F.fim >= 0 ? '<span class="chip ok">Positivo</span>' : '<span class="chip bad">Negativo</span>'} ${F.lastC && Math.abs(F.lastC.dif) < 0.01 ? '<span class="chip ok">Conciliado</span>' : '<span class="chip warn">Conferir</span>'}</span>
    </div></div>
    <div><h3 style="margin-bottom:10px">Clínica Social</h3><div class="split">
@@ -303,8 +349,18 @@ function vCad() {
     <td><label style="display:flex;gap:4px;align-items:center"><input type="checkbox" data-g="${i}" data-k="revisar" ${a.revisar ? "checked" : ""}> conferir</label></td>
     <td><button class="ghost" data-rmv="regras:${i}">Remover</button></td></tr>`).join("");
   const p = CAD.clinica || {};
-  return `<div class="panel"><div class="ph"><div><h2>Saldo inicial de ${mesNome(UI.mes)}</h2><p>Deixe em branco para herdar o saldo final do mês anterior.</p></div></div>
-   <div class="filters"><label class="f">Saldo inicial (R$)<input type="number" step="0.01" id="cIni" value="${typeof md.saldoInicial === "number" ? md.saldoInicial : ""}" placeholder="${saldoIni(UI.mes).toFixed(2)}"></label><button class="pri w" id="cIniSave">Salvar saldo</button></div></div>
+  const pp = (CAD.professores || []).map((a, i) => ({ a, i })).sort((x, y) => (y.a.mes || "").localeCompare(x.a.mes || "")).map(({ a, i }) => `<tr>
+    <td><input type="month" data-pp="${i}" data-k="mes" value="${esc(a.mes || "")}" style="min-width:130px"></td><td><input data-pp="${i}" data-k="nome" value="${esc(a.nome || "")}"></td>
+    <td><input data-pp="${i}" data-k="funcao" value="${esc(a.funcao || "")}" placeholder="Trainer, assistente…" style="max-width:140px"></td>
+    <td><input type="number" step="0.01" data-pp="${i}" data-k="devido" value="${a.devido ?? ""}" style="max-width:120px"></td><td><button class="ghost" data-rmv="professores:${i}">Remover</button></td></tr>`).join("");
+  const ct = (CAD.contas || []).map((c, i) => `<tr><td><input data-q="${i}" data-k="nome" value="${esc(c.nome)}" style="max-width:140px"></td>
+    <td><input type="number" step="0.01" data-q="${i}" data-k="saldoInicial" value="${c.saldoInicial ?? 0}" style="max-width:130px"></td>
+    <td><input type="date" data-q="${i}" data-k="desde" value="${esc(c.desde || "")}"></td><td><input type="date" data-q="${i}" data-k="encerrada" value="${esc(c.encerrada || "")}"></td>
+    <td class="num">${R$(saldoContaAte(c.id, hoje()))}</td></tr>`).join("");
+  return `${contas() ? `<div class="panel"><div class="ph"><div><h2>Contas bancárias</h2><p>Saldo inicial é o saldo da conta no dia anterior à data “Desde”. O caixa da SOBAB é a soma das contas.</p></div></div>
+   <div class="tblwrap"><table><thead><tr><th>Conta</th><th>Saldo inicial</th><th>Desde</th><th>Encerrada em</th><th>Saldo hoje</th></tr></thead><tbody>${ct}</tbody></table></div></div>`
+  : `<div class="panel"><div class="ph"><div><h2>Saldo inicial de ${mesNome(UI.mes)}</h2><p>Deixe em branco para herdar o saldo final do mês anterior.</p></div></div>
+   <div class="filters"><label class="f">Saldo inicial (R$)<input type="number" step="0.01" id="cIni" value="${typeof md.saldoInicial === "number" ? md.saldoInicial : ""}" placeholder="${saldoIni(UI.mes).toFixed(2)}"></label><button class="pri w" id="cIniSave">Salvar saldo</button></div></div>`}
   <div class="panel"><div class="ph"><div><h2>Conta bancária</h2><p>Aparece embaixo do nome do sistema.</p></div></div>
    <div class="filters"><label class="f" style="flex:1">Descrição da conta<input id="cConta" value="${esc(CAD.conta || "")}" placeholder="Ex.: Conta Cora · Ag 0001 · CC 000000-0"></label></div></div>
   <div class="panel"><div class="ph"><div><h2>Alunos da Formação</h2><p>“Meses” só para quem paga em parcelas específicas (ex.: 1,6,11). Vazio = todo mês.</p></div><button class="w" data-aadd="alunos">Adicionar aluno</button></div>
@@ -322,6 +378,8 @@ function vCad() {
     <label class="f">Terapeutas que não aparecem no cadastro de pacientes<textarea id="lTer" class="lista">${lst("terapeutasExtra")}</textarea></label>
     <label class="f">Dias do repasse aos terapeutas<span style="display:flex;gap:8px;align-items:center"><input type="number" id="dR1" min="1" max="31" value="${(CAD.diaRepasse || [13, 15])[0]}" style="max-width:80px"> a <input type="number" id="dR2" min="1" max="31" value="${(CAD.diaRepasse || [13, 15])[1]}" style="max-width:80px"></span></label>
    </div></div>
+  <div class="panel"><div class="ph"><div><h2>Pagamento de professores</h2><p>Valor líquido devido a cada professor no mês. O relatório “Repasses e professores” compara com o que saiu da conta.</p></div><button class="w" data-aadd="professores">Adicionar</button></div>
+   <div class="tblwrap"><table><thead><tr><th>Mês</th><th>Professor</th><th>Função</th><th>Devido (R$)</th><th></th></tr></thead><tbody>${pp || '<tr><td colspan="5" class="empty">Nenhum pagamento cadastrado.</td></tr>'}</tbody></table></div></div>
   <div class="panel"><div class="ph"><div><h2>Divisão da Clínica Social</h2></div></div>
    <div class="filters"><label class="f">SOBAB %<input type="number" id="pS" value="${p.sobab}" style="max-width:90px"></label><label class="f">Poupança %<input type="number" id="pP" value="${p.poupanca}" style="max-width:90px"></label><label class="f">Terapeutas %<input type="number" id="pT" value="${p.terapeutas}" style="max-width:90px"></label></div></div>
   <div class="salvarbar"><button class="pri w" id="cadSave">Salvar cadastros</button></div>`;
@@ -348,6 +406,7 @@ document.addEventListener("click", async e => {
   const b = e.target.closest("button,[data-day]"); if (!b) return; const d = b.dataset;
   if (b.closest("#tabs") && d.t) { UI.tab = d.t; saveUI(); render(); window.scrollTo(0, 0); return; }
   if (d.go) { const alvo = d.go === "conc" ? "semana" : d.go; if (!podeVer(alvo)) return; UI.tab = alvo; if (d.rev) { UI.f = { ...UI.f, rev: true, nconc: false }; } if (d.nconc) { UI.f = { ...UI.f, nconc: true, rev: false }; } saveUI(); render(); window.scrollTo(0, 0); return; }
+  if (d.conta) { UI.conta = d.conta; UI.open = null; render(); return; }
   if (d.novo) { abrir(null, d.novo === "S" ? "S" : "E", d.novo === "S"); return; }
   if (d.ed) { abrir(L.find(x => x.id === d.ed)); return; }
   if (d.ok) { await W(d.ok, { revisar: false }); return; }
@@ -355,7 +414,7 @@ document.addEventListener("click", async e => {
   if (d.rp) { b.disabled = true; if (await W(d.rp, { aprov: "reprovado", aprovPor: meId || "", aprovEm: new Date().toISOString() })) toast("Pagamento reprovado"); else b.disabled = false; return; }
   if (d.pg) { const x = L.find(y => y.id === d.pg); if (!x.valor) { toast("Informe o valor antes de marcar como pago."); return; }
     if (await W(d.pg, { status: "realizado", conc: false, pagoEm: hoje() })) toast("Marcado como pago. Confira depois na conciliação."); return; }
-  if (d.aadd) { const k = d.aadd; lerCad(); const novo = k === "fixas" ? { dia: 1, desc: "", cat: "Outras saídas", metodo: "Pix", valor: 0, obs: "" } : k === "regras" ? { tipo: "S", contem: "", cat: "Outras saídas", desc: "", revisar: false } : { nome: "", valor: 0, meses: [] };
+  if (d.aadd) { const k = d.aadd; lerCad(); const novo = k === "fixas" ? { dia: 1, desc: "", cat: "Outras saídas", metodo: "Pix", valor: 0, obs: "" } : k === "regras" ? { tipo: "S", contem: "", cat: "Outras saídas", desc: "", revisar: false } : k === "professores" ? { mes: UI.mes, nome: "", funcao: "Trainer", devido: 0 } : { nome: "", valor: 0, meses: [] };
     CAD[k] = [...(CAD[k] || []), novo]; render(); return; }
   if (d.rmv) { const [k, i] = d.rmv.split(":"); lerCad(); CAD[k].splice(+i, 1); render(); return; }
 });
@@ -365,7 +424,7 @@ document.addEventListener("change", async e => {
   if (d.cat) { await W(d.cat, { cat: t.value, revisar: false }); return; }
   if (d.cc) { await W(d.cc, { conc: t.checked }); return; }
   if (d.vl) { await W(d.vl, { valor: +t.value || 0 }); return; }
-  if (d.sc) { const v = t.value === "" ? null : +t.value; const sc = { ...((MESES[UI.mes] || {}).saldosCora || {}) }; if (v === null) delete sc[d.sc]; else sc[d.sc] = v; await WM(UI.mes, { saldosCora: sc }); return; }
+  if (d.sc) { const v = t.value === "" ? null : +t.value; await gravarSaldoDia(UI.mes, contas() ? contaConc(UI.mes) : null, d.sc, v); return; }
   if (d.ic !== undefined && UI.imp) { UI.imp.itens[+d.ic].cat = t.value; UI.imp.itens[+d.ic].revisar = false; UI.imp.itens[+d.ic].dest = "cat:" + t.value; }
   if (d.g !== undefined && d.k === "tipo") { lerCad(); render(); }
 });
@@ -383,6 +442,8 @@ function abrir(x, tipo, prev) {
   $("#lData").value = x ? x.data : (UI.mes === hoje().slice(0, 7) ? hoje() : UI.mes + "-01"); $("#lValor").value = x ? x.valor : "";
   $("#lDesc").value = x ? x.desc : ""; $("#lPessoa").value = x ? x.pessoa : ""; $("#lMet").value = x ? x.metodo || "Pix" : "Pix";
   $("#lStatus").value = x ? x.status : (prev ? "previsto" : "realizado"); $("#lConc").value = x && x.conc ? "1" : "0"; $("#lObs").value = x ? x.obs || "" : "";
+  const cs = contas(); $("#lContaBox").hidden = !cs;
+  if (cs) { const cur = x ? contaDe(x) : contaAtiva(); $("#lConta").innerHTML = cs.map(c => `<option value="${esc(c.id)}" ${c.id === cur ? "selected" : ""}>${esc(c.nome)}</option>`).join(""); }
   $("#lDel").hidden = !x; $("#dlg").showModal();
 }
 $("#lTipo").onchange = e => { $("#lCat").innerHTML = catOpts(e.target.value); };
@@ -393,7 +454,7 @@ $("#fLanc").addEventListener("submit", async e => { e.preventDefault();
   const data = $("#lData").value, v = +$("#lValor").value; if (!data) { toast("Informe a data."); return; }
   const tipo = $("#lTipo").value, status = $("#lStatus").value, old = edId ? L.find(x => x.id === edId) : null;
   const o = { data, mes: data.slice(0, 7), tipo, cat: $("#lCat").value, desc: $("#lDesc").value.trim() || $("#lCat").value, pessoa: $("#lPessoa").value.trim(),
-    valor: v, metodo: $("#lMet").value, status, conc: $("#lConc").value === "1", obs: $("#lObs").value.trim(), revisar: false,
+    valor: v, metodo: $("#lMet").value, status, ...(contas() ? { conta: $("#lConta").value } : {}), conc: $("#lConc").value === "1", obs: $("#lObs").value.trim(), revisar: false,
     aprov: tipo === "S" && status === "previsto" ? ((old && old.aprov) || "pendente") : (old ? old.aprov || "" : "") };
   const ok = edId ? await W(edId, o) : await W(novoId(), { ...o, origem: "manual", operacao: "", criadoEm: new Date().toISOString() }, true);
   if (ok) { $("#dlg").close(); toast(edId ? "Lançamento atualizado" : "Lançamento criado"); }
@@ -429,7 +490,7 @@ async function gerarFixas() {
     const id = `fx-${m}-${String(k + 1).padStart(2, "0")}`; if (L.some(x => x.id === id)) continue;
     const dia = Math.min(f.dia, new Date(+m.slice(0, 4), +m.slice(5), 0).getDate());
     if (await W(id, { data: `${m}-${String(dia).padStart(2, "0")}`, mes: m, tipo: "S", cat: f.cat, desc: f.desc, pessoa: "", operacao: "", valor: +f.valor || 0, metodo: f.metodo || "Pix",
-      status: "previsto", conc: false, origem: "recorrente", revisar: false, aprov: "pendente", obs: (f.obs || "") + (+f.valor ? "" : (f.obs ? " · " : "") + "Valor a definir"), criadoEm: new Date().toISOString() }, true)) n++;
+      conta: contaAtiva(), status: "previsto", conc: false, origem: "recorrente", revisar: false, aprov: "pendente", obs: (f.obs || "") + (+f.valor ? "" : (f.obs ? " · " : "") + "Valor a definir"), criadoEm: new Date().toISOString() }, true)) n++;
   }
   toast(n ? `${n} contas fixas criadas para ${mesNome(m)}` : "As contas fixas deste mês já foram geradas.");
 }
@@ -438,6 +499,9 @@ function lerCad() {
   document.querySelectorAll("[data-a]").forEach(i => { const a = CAD.alunos[+i.dataset.a]; if (!a) return; const k = i.dataset.k; a[k] = k === "valor" ? +i.value || 0 : k === "meses" ? i.value.split(/[,; ]+/).map(Number).filter(n => n >= 1 && n <= 12) : i.value.trim(); });
   document.querySelectorAll("[data-c]").forEach(i => { const a = CAD.cfgm[+i.dataset.c]; if (!a) return; const k = i.dataset.k; if (k === "inicio") { if (i.value) a.inicio = i.value; else delete a.inicio; } else a[k] = k === "valor" ? +i.value || 0 : i.value.trim(); });
   document.querySelectorAll("[data-x]").forEach(i => { const a = CAD.fixas[+i.dataset.x]; if (!a) return; const k = i.dataset.k; a[k] = k === "valor" || k === "dia" ? +i.value || 0 : i.value.trim(); });
+  document.querySelectorAll("[data-pp]").forEach(i => { const a = (CAD.professores || [])[+i.dataset.pp]; if (!a) return; const k = i.dataset.k; a[k] = k === "devido" ? +i.value || 0 : i.value.trim(); });
+  document.querySelectorAll("[data-q]").forEach(i => { const c = (CAD.contas || [])[+i.dataset.q]; if (!c) return; const k = i.dataset.k;
+    if (k === "saldoInicial") c.saldoInicial = +i.value || 0; else if (k === "encerrada" && !i.value) delete c.encerrada; else c[k] = i.value.trim(); });
   document.querySelectorAll("[data-g]").forEach(i => { const a = CAD.regras[+i.dataset.g]; if (!a) return; const k = i.dataset.k;
     if (k === "revisar") a.revisar = i.checked; else if (k === "valor") { if (i.value === "") delete a.valor; else a.valor = +i.value; } else a[k] = i.value.trim(); });
   const pS = $("#pS"); if (pS) CAD.clinica = { sobab: +pS.value || 0, poupanca: +$("#pP").value || 0, terapeutas: +$("#pT").value || 0 };
@@ -446,7 +510,7 @@ function lerCad() {
     CAD.diaRepasse = [Math.max(1, +$("#dR1").value || 13), Math.max(1, +$("#dR2").value || 15)]; }
 }
 async function salvarCad() { lerCad(); CAD.alunos = CAD.alunos.filter(a => a.nome); CAD.cfgm = CAD.cfgm.filter(a => a.nome); CAD.fixas = CAD.fixas.filter(a => a.desc);
-  CAD.regras = (CAD.regras || []).filter(r => r.contem && r.cat);
+  CAD.regras = (CAD.regras || []).filter(r => r.contem && r.cat); CAD.professores = (CAD.professores || []).filter(p => p.nome && p.mes);
   try { await db.doc("cad/geral").set(CAD); toast("Cadastros salvos"); } catch (e) { toast(semPermissao(e) ? "Seu acesso não permite alterar cadastros." : "Não foi possível salvar os cadastros."); } }
 async function fecharMes() {
   const b = $("#fechar"); if (b.dataset.arm !== "1") { b.dataset.arm = "1"; b.textContent = "Confirmar: fechar " + mesNome(UI.mes); return; }
@@ -463,8 +527,8 @@ function sheet(rows, widths, moneyCols) {
   return ws;
 }
 const dFull = d => d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4) : "";
-function linhasLanc(a) { return [["Data", "Mês", "Tipo", "Categoria", "Grupo", "Descrição", "Pessoa / favorecido", "Forma", "Situação", "Conciliado", "Aprovação", "Valor", "Observação"],
-  ...a.sort((x, y) => x.data.localeCompare(y.data)).map(x => [dFull(x.data), x.mes, x.tipo === "E" ? "Entrada" : "Saída", x.cat, x.tipo === "E" ? "Receita" : grupoS(x.cat), x.desc, x.pessoa, x.metodo, x.status === "realizado" ? "Realizado" : "Previsto", x.conc ? "Sim" : "Não", x.aprov || "", +x.valor, x.obs || ""])]; }
+function linhasLanc(a) { return [["Data", "Mês", "Conta", "Tipo", "Categoria", "Grupo", "Descrição", "Pessoa / favorecido", "Forma", "Situação", "Conciliado", "Aprovação", "Valor", "Observação"],
+  ...a.sort((x, y) => x.data.localeCompare(y.data)).map(x => [dFull(x.data), x.mes, nomeConta(contaDe(x)), x.tipo === "E" ? "Entrada" : "Saída", x.cat, ehNeutro(x) ? "Transferências" : x.tipo === "E" ? "Receita" : grupoS(x.cat), x.desc, x.pessoa, x.metodo, x.status === "realizado" ? "Realizado" : "Previsto", x.conc ? "Sim" : "Não", x.aprov || "", +x.valor, x.obs || ""])]; }
 function baixar(blob, nome) {
   const url = URL.createObjectURL(blob), a = document.createElement("a");
   a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
@@ -476,8 +540,8 @@ async function salvarArquivo(wb, nome) {
 }
 async function exportMes(m) {
   const F = fech(m), wb = XLSX.utils.book_new();
-  const res = [["SOBAB · Fechamento de caixa", ""], ["Mês", mesNome(m)], ["", ""], ["Saldo inicial", F.ini], ["(+) Entradas totais", F.te], ["(-) Despesas fixas", F.fx], ["(-) Despesas variáveis", F.vr], ["(-) Terapeutas e professores", F.rp], ["(=) Saldo final", F.fim],
-    ["Saldo Cora " + (F.lastC ? dFull(F.lastC.d) : ""), F.lastC ? F.lastC.cora : "não informado"], ["Status", F.fim >= 0 ? "POSITIVO" : "NEGATIVO"], ["", ""], ["ENTRADAS POR CATEGORIA", ""], ...F.byE, ["", ""], ["SAÍDAS POR CATEGORIA", ""], ...F.byS.map(([c, g, v]) => [c + " (" + g + ")", v]),
+  const res = [["SOBAB · Fechamento de caixa", ""], ["Mês", mesNome(m)], ["", ""], ["Saldo inicial", F.ini], ["(+) Entradas totais", F.te], ["(-) Despesas fixas", F.fx], ["(-) Despesas variáveis", F.vr], ["(-) Terapeutas e professores", F.rp], ...(Math.abs(F.nt) >= 0.01 ? [["(±) Transferências entre contas e aplicações", F.nt]] : []), ["(=) Saldo final", F.fim],
+    ["Saldo " + F.banco + " " + (F.lastC ? dFull(F.lastC.d) : ""), F.lastC ? F.lastC.cora : "não informado"], ["Status", F.fim >= 0 ? "POSITIVO" : "NEGATIVO"], ["", ""], ["ENTRADAS POR CATEGORIA", ""], ...F.byE, ["", ""], ["SAÍDAS POR CATEGORIA", ""], ...F.byS.map(([c, g, v]) => [c + " (" + g + ")", v]),
     ["", ""], ["CLÍNICA SOCIAL", ""], ["Total bruto (pacientes)", F.cl.bruto], [`SOBAB (${F.cl.p.sobab}%)`, F.cl.sobab], [`Poupança clínica (${F.cl.p.poupanca}%)`, F.cl.poup], [`Terapeutas (${F.cl.p.terapeutas}%)`, F.cl.ter], ["Repassado a terapeutas", F.cl.rep]];
   XLSX.utils.book_append_sheet(wb, sheet(res, [38, 18], [1]), "Resumo");
   const ent = [["Data", "Descrição", "Pessoa", "Categoria", "Forma", "Conciliado", "Valor", "Observação"], ...F.E.sort((a, b) => a.data.localeCompare(b.data)).map(x => [dFull(x.data), x.desc, x.pessoa, x.cat, x.metodo, x.conc ? "Sim" : "Não", +x.valor, x.obs || ""]), ["", "", "", "", "", "TOTAL", F.te, ""]];
@@ -499,7 +563,7 @@ async function exportTudo() {
   let all = L.slice();
   try { const s = await db.collection("lanc").get(); all = s.docs.map(d => ({ id: d.id, ...d.data() })); } catch (e) { all = L.slice(); }
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, sheet(linhasLanc(all), [12, 9, 9, 22, 11, 28, 30, 14, 11, 10, 11, 14, 30], [11]), "Lançamentos");
+  XLSX.utils.book_append_sheet(wb, sheet(linhasLanc(all), [12, 9, 10, 9, 22, 13, 28, 30, 14, 11, 10, 11, 14, 30], [12]), "Lançamentos");
   const res = [["Mês", "Saldo inicial", "Entradas", "Despesas fixas", "Despesas variáveis", "Terapeutas e professores", "Saldo final"], ...meses().map(m => { const F = fech(m); return [mesNome(m), F.ini, F.te, F.fx, F.vr, F.rp, F.fim]; })];
   XLSX.utils.book_append_sheet(wb, sheet(res, [16, 15, 15, 15, 17, 22, 15], [1, 2, 3, 4, 5, 6]), "Resumo por mês");
   await salvarArquivo(wb, `SOBAB_caixa_base_completa_${hoje()}.xlsx`);

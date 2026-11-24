@@ -6,7 +6,7 @@ Para colocar no ar: [COMO-PUBLICAR.md](COMO-PUBLICAR.md).
 
 ## Como funciona
 
-- `site/`: o sistema (HTML, CSS e JavaScript puro, sem etapa de build). É a pasta publicada no Netlify (ver `../netlify.toml`).
+- `site/`: o sistema (HTML, CSS e JavaScript puro, sem etapa de build). É a pasta publicada no GitHub Pages pelo workflow `.github/workflows/financeiro-sobab-publicar.yml`.
 - **Firebase Authentication** (e-mail e senha) para o login e **Cloud Firestore** para os dados.
 - `firestore.rules`: quem pode o quê. A tela esconde o que a pessoa não pode fazer, mas quem garante é o banco.
 

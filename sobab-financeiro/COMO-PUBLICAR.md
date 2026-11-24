@@ -1,11 +1,11 @@
 # Como colocar o Financeiro SOBAB no ar
 
-Tudo gratuito. São duas contas, as duas entram com o seu Gmail:
+Tudo gratuito. O sistema usa duas coisas:
 
-- **Firebase** (do Google): guarda os dados e cuida do login.
-- **Netlify**: deixa o sistema num link fixo, tipo `financeiro-sobab.netlify.app`.
+- **Firebase** (do Google, entra com o seu Gmail): guarda os dados e cuida do login.
+- **GitHub Pages**: publica o sistema direto do seu repositório, no link `https://mayarasariel-commits.github.io/macbookmayara/`.
 
-Leva uns 20 minutos. Você só faz uma vez.
+Você faz os passos 1 a 6 (uns 15 minutos, só uma vez). O resto o Claude faz.
 
 ---
 
@@ -55,25 +55,22 @@ Leva uns 20 minutos. Você só faz uma vez.
 
 > Esses valores não são senha. Eles só dizem qual é o projeto. Quem protege os dados é o login junto com as regras do passo 3.
 
-## Passo 5. Publicar no Netlify
+## Passo 5. Ligar o GitHub Pages (um clique)
 
-1. Abra **app.netlify.com** e entre com **GitHub** (mesma conta onde está o repositório).
-2. Clique em **Add new site > Import an existing project > GitHub**.
-3. Escolha o repositório **macbookmayara**.
-4. Não precisa mudar nada na tela de configuração: o arquivo `netlify.toml` já diz onde está o sistema. Clique em **Deploy**.
-5. Depois de publicar: **Site configuration > Change site name** e coloque `financeiro-sobab` (ou outro nome livre).
-6. Seu link fica `https://financeiro-sobab.netlify.app`.
+1. No GitHub, abra o repositório **macbookmayara** e clique em **Settings** (Configurações).
+2. No menu da esquerda, clique em **Pages**.
+3. Em **Build and deployment > Source**, escolha **GitHub Actions**. Não precisa salvar: a escolha já vale.
 
-Toda vez que o sistema for atualizado no GitHub, o Netlify publica sozinho em 1 ou 2 minutos.
+Toda vez que o sistema for atualizado na versão principal, ele publica sozinho em 1 ou 2 minutos.
 
-## Passo 6. Avisar o Firebase sobre o link novo
+## Passo 6. Avisar o Firebase sobre o link do sistema
 
 1. No Firebase: **Authentication > Configurações > Domínios autorizados**.
-2. Clique em **Adicionar domínio** e cole `financeiro-sobab.netlify.app` (sem `https://`).
+2. Clique em **Adicionar domínio** e cole `mayarasariel-commits.github.io`.
 
 ## Passo 7. Primeiro acesso e dados antigos
 
-1. Abra o link do sistema.
+1. Abra `https://mayarasariel-commits.github.io/macbookmayara/`.
 2. Clique em **Primeira vez usando o sistema? Criar o acesso da administradora**. Esse link só aparece enquanto o sistema não tem administradora.
 3. Preencha seu nome, e-mail e uma senha. Você entra direto.
 4. Vá na aba **Acessos > Importar backup** e escolha o arquivo `SOBAB_dados_para_importar.json` (os lançamentos, saldos e cadastros do sistema antigo).

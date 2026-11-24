@@ -1,0 +1,33 @@
+# Testes do Financeiro SOBAB: leitura do extrato, classificação, permissões do banco e fluxo no navegador.
+name: Testes Financeiro SOBAB
+
+on:
+  pull_request:
+    paths: ["sobab-financeiro/**", ".github/workflows/financeiro-sobab-*.yml"]
+  push:
+    branches: [main]
+    paths: ["sobab-financeiro/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sobab-financeiro
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: sobab-financeiro/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - run: npm test

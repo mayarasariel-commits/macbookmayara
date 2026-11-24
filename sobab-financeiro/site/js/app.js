@@ -442,11 +442,15 @@ function abrir(x, tipo, prev) {
   $("#lData").value = x ? x.data : (UI.mes === hoje().slice(0, 7) ? hoje() : UI.mes + "-01"); $("#lValor").value = x ? x.valor : "";
   $("#lDesc").value = x ? x.desc : ""; $("#lPessoa").value = x ? x.pessoa : ""; $("#lMet").value = x ? x.metodo || "Pix" : "Pix";
   $("#lStatus").value = x ? x.status : (prev ? "previsto" : "realizado"); $("#lConc").value = x && x.conc ? "1" : "0"; $("#lObs").value = x ? x.obs || "" : "";
+  $("#lRepasseDe").value = x ? x.repasseDe || "" : ""; mostraRep();
   const cs = contas(); $("#lContaBox").hidden = !cs;
   if (cs) { const cur = x ? contaDe(x) : contaAtiva(); $("#lConta").innerHTML = cs.map(c => `<option value="${esc(c.id)}" ${c.id === cur ? "selected" : ""}>${esc(c.nome)}</option>`).join(""); }
   $("#lDel").hidden = !x; $("#dlg").showModal();
 }
-$("#lTipo").onchange = e => { $("#lCat").innerHTML = catOpts(e.target.value); };
+// "Repasse em nome de": terapeuta que recebeu na conta de outra pessoa
+function mostraRep() { $("#lRepBox").hidden = !($("#lTipo").value === "S" && $("#lCat").value === "Terapeutas"); }
+$("#lTipo").onchange = e => { $("#lCat").innerHTML = catOpts(e.target.value); mostraRep(); };
+$("#lCat").addEventListener("change", mostraRep);
 $("#lCancel").onclick = () => $("#dlg").close();
 $("#lDel").onclick = async () => { const b = $("#lDel"); if (b.dataset.arm !== "1") { b.dataset.arm = "1"; b.textContent = "Confirmar exclusão"; return; }
   b.dataset.arm = ""; b.textContent = "Excluir"; try { await db.collection("lanc").doc(edId).delete(); $("#dlg").close(); toast("Lançamento excluído"); } catch (e) { toast("Não foi possível excluir."); } };
@@ -455,6 +459,7 @@ $("#fLanc").addEventListener("submit", async e => { e.preventDefault();
   const tipo = $("#lTipo").value, status = $("#lStatus").value, old = edId ? L.find(x => x.id === edId) : null;
   const o = { data, mes: data.slice(0, 7), tipo, cat: $("#lCat").value, desc: $("#lDesc").value.trim() || $("#lCat").value, pessoa: $("#lPessoa").value.trim(),
     valor: v, metodo: $("#lMet").value, status, ...(contas() ? { conta: $("#lConta").value } : {}), conc: $("#lConc").value === "1", obs: $("#lObs").value.trim(), revisar: false,
+    repasseDe: !$("#lRepBox").hidden ? $("#lRepasseDe").value.trim() : "",
     aprov: tipo === "S" && status === "previsto" ? ((old && old.aprov) || "pendente") : (old ? old.aprov || "" : "") };
   const ok = edId ? await W(edId, o) : await W(novoId(), { ...o, origem: "manual", operacao: "", criadoEm: new Date().toISOString() }, true);
   if (ok) { $("#dlg").close(); toast(edId ? "Lançamento atualizado" : "Lançamento criado"); }

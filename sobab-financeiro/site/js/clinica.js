@@ -289,8 +289,9 @@ function conferenciaTerapeutas(comp) {
   const pagos = doMes(mesPg).filter(x => x.tipo === "S" && x.status === "realizado" && x.cat === "Terapeutas");
   const sobra = [];
   for (const x of pagos) {
-    const alvo = Object.values(porT).find(o => mesmaPessoa(x.pessoa, o.nome));
-    if (alvo) { alvo.pago += +x.valor || 0; alvo.datas.push(dBR(x.data)); } else sobra.push(x);
+    const quem = x.repasseDe || x.pessoa; // pago na conta de outra pessoa: conta para quem é o repasse
+    const alvo = Object.values(porT).find(o => mesmaPessoa(quem, o.nome));
+    if (alvo) { alvo.pago += +x.valor || 0; alvo.datas.push(dBR(x.data) + (x.repasseDe ? " (na conta de " + (x.pessoa || "outra pessoa") + ")" : "")); } else sobra.push(x.repasseDe ? { ...x, pessoa: x.repasseDe } : x);
   }
   const extras = {};
   for (const x of sobra) { const k = x.pessoa || x.desc; const o = extras[k] = extras[k] || { nome: k, n: 0, rec: 0, pago: 0, datas: [], semPrevisao: true }; o.pago += +x.valor || 0; o.datas.push(dBR(x.data)); }

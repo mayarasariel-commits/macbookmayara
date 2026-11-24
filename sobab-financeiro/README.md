@@ -2,11 +2,11 @@
 
 Fluxo de caixa, conciliação bancária (extrato Cora), Clínica Social, contas a pagar com aprovação da diretoria, mensalidades e fechamento mensal. Login com e-mail e senha.
 
-Para colocar no ar: [COMO-PUBLICAR.md](COMO-PUBLICAR.md).
+No ar em https://financeiro-sobab-5b4f6.web.app. Como usar e manter: [COMO-USAR.md](COMO-USAR.md).
 
 ## Como funciona
 
-- `site/`: o sistema (HTML, CSS e JavaScript puro, sem etapa de build). É a pasta publicada no GitHub Pages pelo workflow `.github/workflows/financeiro-sobab-publicar.yml`.
+- `site/`: o sistema (HTML, CSS e JavaScript puro, sem etapa de build). É a pasta publicada no Firebase Hosting (`firebase deploy --only hosting`).
 - **Firebase Authentication** (e-mail e senha) para o login e **Cloud Firestore** para os dados.
 - `firestore.rules`: quem pode o quê. A tela esconde o que a pessoa não pode fazer, mas quem garante é o banco.
 
